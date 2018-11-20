@@ -137,7 +137,8 @@ void MPU60X0::initialize9250MasterMode(){
 		switchSPIEnabled(true);
 		delay(1);
 	} else {
-		Wire.begin(400000);
+		Wire.begin();
+		Wire.setClock(400000L);
 		switchSPIEnabled(false);
 	}
 	
@@ -182,8 +183,9 @@ void MPU60X0::initialize9250MasterMode(){
 
     // check the WHO AM I byte, expected value is 0x71 (decimal 113)
 	readRegister(MPU60X0_RA_WHO_AM_I, 1,&buff[0]);
-    if( buff[0] != 113 ){
-        Serial.println("9250 Not Recognized");
+    //if( buff[0] != 113 || buff[0] != 115){
+     if( buff[0] != 0x71 && buff[0] != 0x73){
+        Serial.print("9250 Not Recognized: ");Serial.print("0x"); Serial.println(buff[0], HEX);
     }
 
     // enable accelerometer and gyro
@@ -192,9 +194,9 @@ void MPU60X0::initialize9250MasterMode(){
     }
 
     /* setup the accel and gyro ranges */
-	setFullScaleGyroRange(MPU60X0_GYRO_FS_2000);	// set gyro range to +/- 2000 deg/second
-	setFullScaleAccelRange(MPU60X0_ACCEL_FS_2);		// set accel range to +- 2g
-	setDLPFMode(MPU60X0_DLPF_BW_98); 
+	setFullScaleGyroRange(MPU60X0_GYRO_FS_2000);	// set gyro range to +/- 250 deg/second
+	setFullScaleAccelRange(MPU60X0_ACCEL_FS_16);		// set accel range to +- 2g
+	//setFilt9250(DLPF_BANDWIDTH_92HZ, 4); 
 	
     // enable I2C master mode
     if( !writeRegister(MPU60X0_RA_USER_CTRL,I2C_MST_EN) ){
@@ -229,14 +231,14 @@ void MPU60X0::initialize9250MasterMode(){
 	
     // read the AK8963 ASA registers and compute magnetometer scale factors
 	readAKRegisters(AK8963_RA_ASAX, sizeof(buff), &buff[0]);
-	//_magScaleX = ((((float)buff[0]) - 128.0f)/(256.0f) + 1.0f) * 4912.0f / 32760.0f; // micro Tesla
-	//_magScaleY = ((((float)buff[1]) - 128.0f)/(256.0f) + 1.0f) * 4912.0f / 32760.0f; // micro Tesla
-	//_magScaleZ = ((((float)buff[2]) - 128.0f)/(256.0f) + 1.0f) * 4912.0f / 32760.0f; // micro Tesla 
+	_magScaleX = ((((float)buff[0]) - 128.0f)/(256.0f) + 1.0f) * 4912.0f / 32760.0f; // micro Tesla
+	_magScaleY = ((((float)buff[1]) - 128.0f)/(256.0f) + 1.0f) * 4912.0f / 32760.0f; // micro Tesla
+	_magScaleZ = ((((float)buff[2]) - 128.0f)/(256.0f) + 1.0f) * 4912.0f / 32760.0f; // micro Tesla 
 	_magScaleX = buff[0];
 	_magScaleY = buff[1];
 	_magScaleZ = buff[2];
-	//Serial.print(_magScaleX); Serial.print(", "); Serial.print(_magScaleY); 
-	//Serial.print(", "); Serial.println(_magScaleZ);
+	Serial.print(_magScaleX); Serial.print(", "); Serial.print(_magScaleY); 
+	Serial.print(", "); Serial.println(_magScaleZ);
 	
     // set AK8963 to Power Down
     if( !writeAKRegister(AK8963_RA_CNTL1, AK8963_MODE_POWERDOWN) ){
@@ -257,13 +259,211 @@ void MPU60X0::initialize9250MasterMode(){
 
     // instruct the MPU9250 to get 7 bytes of data from the AK8963 at the sample rate
     readAKRegisters(AK8963_RA_HXL,sizeof(data),&data[0]);
+    Serial.println("Mag Finished:");
 	Serial.println((((int16_t)data[1]) << 8) | data[0]);  
     Serial.println((((int16_t)data[3]) << 8) | data[2]);
     Serial.println((((int16_t)data[5]) << 8) | data[4]);
-	
-	
+
     // successful init, return 0
 	//Serial.println("FINISHED");
+}
+
+
+/* sets the sample rate divider to values other than default */
+int MPU60X0::set9250Srd(uint8_t srd) 
+{
+    
+  uint8_t _buffer[21];
+  /* setting the sample rate divider to 19 to facilitate setting up magnetometer */
+  if(writeRegister(MPU60X0_RA_SMPLRT_DIV,19) < 0){ // setting the sample rate divider
+    return -1;
+  }
+  if(srd > 9){
+    // set AK8963 to Power Down
+    if(writeAKRegister(AK8963_RA_CNTL1,AK8963_MODE_POWERDOWN) < 0){
+      return -2;
+    }
+    delay(100); // long wait between AK8963 mode changes  
+    // set AK8963 to 16 bit resolution, 8 Hz update rate
+    if(writeAKRegister(AK8963_RA_CNTL1,AK8963_MODE_CONT1) < 0){
+      return -3;
+    }
+    delay(100); // long wait between AK8963 mode changes     
+    // instruct the MPU9250 to get 7 bytes of data from the AK8963 at the sample rate
+    readAKRegisters(AK8963_RA_HXL,7,_buffer);
+  } else {
+    // set AK8963 to Power Down
+    if(writeAKRegister(AK8963_RA_CNTL1,AK8963_MODE_POWERDOWN) < 0){
+      return -2;
+    }
+    delay(100); // long wait between AK8963 mode changes  
+    // set AK8963 to 16 bit resolution, 100 Hz update rate
+    if(writeAKRegister(AK8963_RA_CNTL1,AK8963_MODE_CONT2) < 0){
+      return -3;
+    }
+    delay(100); // long wait between AK8963 mode changes     
+    // instruct the MPU9250 to get 7 bytes of data from the AK8963 at the sample rate
+    readAKRegisters(AK8963_RA_HXL,7,_buffer);    
+  } 
+  /* setting the sample rate divider */
+  if(writeRegister(MPU60X0_RA_SMPLRT_DIV,srd) < 0){ // setting the sample rate divider
+    return -4;
+  } 
+  //_srd = srd;
+  return 1; 
+}
+
+/* sets the DLPF and interrupt settings */
+int MPU60X0::setFilt9250(mpu9250_dlpf_bandwidth bandwidth, uint8_t SRD){
+    uint8_t data[7];
+
+    switch(bandwidth) {
+        case DLPF_BANDWIDTH_184HZ:
+            if( !writeRegister(MPU9250_RA_ACCEL_CONFIG2, MPU60X0_DLPF_BW_184) ){ // setting accel bandwidth to 184Hz
+                return -1;
+            } 
+            if( !writeRegister(MPU60X0_RA_GYRO_CONFIG, MPU60X0_DLPF_BW_184) ){ // setting gyro bandwidth to 184Hz
+                return -1;
+            }
+            break;
+
+        case DLPF_BANDWIDTH_92HZ:
+            if( !writeRegister(MPU9250_RA_ACCEL_CONFIG2, MPU60X0_DLPF_BW_98) ){ // setting accel bandwidth to 92Hz
+                return -1;
+            } 
+            if( !writeRegister(MPU60X0_RA_GYRO_CONFIG, MPU60X0_DLPF_BW_98) ){ // setting gyro bandwidth to 92Hz
+                return -1;
+            }
+            break; 
+
+        case DLPF_BANDWIDTH_41HZ:
+            if( !writeRegister(MPU9250_RA_ACCEL_CONFIG2, MPU60X0_DLPF_BW_42) ){ // setting accel bandwidth to 41Hz
+                return -1;
+            } 
+            if( !writeRegister(MPU60X0_RA_GYRO_CONFIG, MPU60X0_DLPF_BW_42) ){ // setting gyro bandwidth to 41Hz
+                return -1;
+            } 
+            break;
+
+        case DLPF_BANDWIDTH_20HZ:
+            if( !writeRegister(MPU9250_RA_ACCEL_CONFIG2, MPU60X0_DLPF_BW_20) ){ // setting accel bandwidth to 20Hz
+                return -1;
+            } 
+            if( !writeRegister(MPU60X0_RA_GYRO_CONFIG, MPU60X0_DLPF_BW_20) ){ // setting gyro bandwidth to 20Hz
+                return -1;
+            }
+            break;
+
+        case DLPF_BANDWIDTH_10HZ:
+            if( !writeRegister(MPU9250_RA_ACCEL_CONFIG2,MPU60X0_DLPF_BW_10) ){ // setting accel bandwidth to 10Hz
+                return -1;
+            } 
+            if( !writeRegister(MPU60X0_RA_GYRO_CONFIG,MPU60X0_DLPF_BW_10) ){ // setting gyro bandwidth to 10Hz
+                return -1;
+            }
+            break;
+
+        case DLPF_BANDWIDTH_5HZ:
+            if( !writeRegister(MPU9250_RA_ACCEL_CONFIG2,MPU60X0_DLPF_BW_5) ){ // setting accel bandwidth to 5Hz
+                return -1;
+            } 
+            if( !writeRegister(MPU60X0_RA_GYRO_CONFIG,MPU60X0_DLPF_BW_5) ){ // setting gyro bandwidth to 5Hz
+                return -1;
+            }
+            break; 
+    }
+
+    /* setting the sample rate divider */
+    if( !writeRegister(MPU60X0_RA_SMPLRT_DIV,SRD) ){ // setting the sample rate divider
+        return -1;
+    } 
+
+    if(SRD > 9){
+
+        // set AK8963 to Power Down
+        if( !writeAKRegister(AK8963_RA_CNTL1, AK8963_MODE_POWERDOWN) ){
+            return -1;
+        }
+        delay(100); // long wait between AK8963 mode changes  
+
+        // set AK8963 to 16 bit resolution, 8 Hz update rate
+        if( !writeAKRegister(AK8963_RA_CNTL1,0x12) ){
+            return -1;
+        }
+        delay(100); // long wait between AK8963 mode changes     
+
+        // instruct the MPU9250 to get 7 bytes of data from the AK8963 at the sample rate
+        readAKRegisters(AK8963_RA_HXL,sizeof(data),&data[0]);
+    }
+
+    /* setting the interrupt */
+    if( !writeRegister(MPU60X0_RA_INT_PIN_CFG,INT_PULSE_50US) ){ // setup interrupt, 50 us pulse
+        return -1;
+    }  
+    if( !writeRegister(MPU60X0_RA_INT_ENABLE,INT_RAW_RDY_EN) ){ // set to data ready
+        return -1;
+    }  
+
+    // successful filter setup, return 0
+    return 0; 
+}
+
+/* enables and disables the interrupt */
+int MPU60X0::enableInt9250(bool enable){
+
+	if(enable){
+		/* setting the interrupt */
+	    if( !writeRegister(MPU60X0_RA_INT_PIN_CFG,INT_PULSE_50US) ){ // setup interrupt, 50 us pulse
+	        return -1;
+	    }  
+	    if( !writeRegister(MPU60X0_RA_INT_ENABLE,INT_RAW_RDY_EN) ){ // set to data ready
+	        return -1;
+	    }  
+	}
+	else{
+	    if( !writeRegister(MPU60X0_RA_INT_ENABLE,INT_DISABLE) ){ // disable interrupt
+	        return -1;
+	    }  
+	}
+
+    // successful interrupt setup, return 0
+    return 0; 
+}
+
+
+
+
+/* get accelerometer data given pointers to store the three values, return data as counts */
+void MPU60X0::get9250AccelCounts(int16_t* ax, int16_t* ay, int16_t* az){
+    uint8_t buff[6];
+    int16_t axx, ayy, azz;
+
+    readRegister(MPU60X0_RA_ACCEL_XOUT_H, sizeof(buff), &buff[0]); // grab the data from the MPU9250
+
+    axx = (((int16_t)buff[0]) << 8) | buff[1];  // combine into 16 bit values
+    ayy = (((int16_t)buff[2]) << 8) | buff[3];
+    azz = (((int16_t)buff[4]) << 8) | buff[5];
+
+    *ax = tX[0]*axx + tX[1]*ayy + tX[2]*azz; // transform axes
+    *ay = tY[0]*axx + tY[1]*ayy + tY[2]*azz;
+    *az = tZ[0]*axx + tZ[1]*ayy + tZ[2]*azz;
+}
+
+
+/* get gyro data given pointers to store the three values, return data as counts */
+void MPU60X0::get9250GyroCounts(int16_t* gx, int16_t* gy, int16_t* gz){
+    uint8_t buff[6];
+    int16_t gxx, gyy, gzz;
+
+    readRegister(MPU60X0_RA_GYRO_XOUT_H, sizeof(buff), &buff[0]); // grab the data from the MPU9250
+
+    gxx = (((int16_t)buff[0]) << 8) | buff[1];  // combine into 16 bit values
+    gyy = (((int16_t)buff[2]) << 8) | buff[3];
+    gzz = (((int16_t)buff[4]) << 8) | buff[5];
+
+    *gx = tX[0]*gxx + tX[1]*gyy + tX[2]*gzz; // transform axes
+    *gy = tY[0]*gxx + tY[1]*gyy + tY[2]*gzz;
+    *gz = tZ[0]*gxx + tZ[1]*gyy + tZ[2]*gzz;
 }
 
 /* get magnetometer data given pointers to store the three values, return data as counts */
@@ -282,6 +482,54 @@ void MPU60X0::get9250MagCounts(int16_t* hx, int16_t* hy, int16_t* hz){
         *hy = 0;
         *hz = 0;
     }
+}
+
+//Configure magenetometer mode and resolution
+void MPU60X0::setMagModeRes(uint8_t mode, uint8_t Mscale) {
+    //I2Cdev::writeBits(bSPI, devMagAddr, AK8963_RA_CNTL1, AK8963_CNTL1_MODE_BIT, AK8963_CNTL1_MODE_LENGTH, mode);
+	I2Cdev::writeByte(bSPI, 0x0C, AK8963_RA_CNTL1, Mscale << 4 | mode);
+	delay(10);
+}
+
+uint8_t MPU60X0::getCompassDataReady(){
+  uint8_t dest[1];
+  
+  readAKRegisters(AK8963_RA_ST1,1,dest);
+  return (dest[0] & 0x01);
+
+}
+
+
+/* get temperature data given pointer to store the value, return data as counts */
+void MPU60X0::get9250TempCounts(int16_t* t){
+    uint8_t buff[2];
+
+    readRegister(MPU60X0_RA_TEMP_OUT_H, sizeof(buff), &buff[0]); // grab the data from the MPU9250
+
+    *t = (((int16_t)buff[0]) << 8) | buff[1];  // combine into 16 bit value and return
+}
+
+void MPU60X0::get9250Motion6Counts(int16_t* ax, int16_t* ay, int16_t* az, int16_t* gx, int16_t* gy, int16_t* gz)
+{
+    uint8_t buff[14];
+    int16_t axx, ayy, azz, gxx, gyy, gzz;
+    readRegister(MPU60X0_RA_ACCEL_XOUT_H, sizeof(buff), &buff[0]); // grab the data from the MPU9250
+
+    axx = (((int16_t)buff[0]) << 8) | buff[1];  // combine into 16 bit values
+    ayy = (((int16_t)buff[2]) << 8) | buff[3];
+    azz = (((int16_t)buff[4]) << 8) | buff[5];
+
+    gxx = (((int16_t)buff[8]) << 8) | buff[9];
+    gyy = (((int16_t)buff[10]) << 8) | buff[11];
+    gzz = (((int16_t)buff[12]) << 8) | buff[13];
+
+    *ax = tX[0]*axx + tX[1]*ayy + tX[2]*azz; // transform axes
+    *ay = tY[0]*axx + tY[1]*ayy + tY[2]*azz;
+    *az = tZ[0]*axx + tZ[1]*ayy + tZ[2]*azz;
+
+    *gx = tX[0]*gxx + tX[1]*gyy + tX[2]*gzz;
+    *gy = tY[0]*gxx + tY[1]*gyy + tY[2]*gzz;
+    *gz = tZ[0]*gxx + tZ[1]*gyy + tZ[2]*gzz;
 }
 
 
@@ -362,6 +610,8 @@ void MPU60X0::get9250Motion10Counts(int16_t* ax, int16_t* ay, int16_t* az, int16
     *gx = tX[0]*gxx + tX[1]*gyy + tX[2]*gzz;
     *gy = tY[0]*gxx + tY[1]*gyy + tY[2]*gzz;
     *gz = tZ[0]*gxx + tZ[1]*gyy + tZ[2]*gzz;
+	
+	delay(5);
 }
 
 
